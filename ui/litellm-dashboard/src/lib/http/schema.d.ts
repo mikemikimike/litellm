@@ -1524,13 +1524,18 @@ export interface paths {
         };
         /**
          * List Plugins
-         * @description List all plugins in the marketplace.
+         * @description List plugins in the marketplace.
+         *
+         *     Admins see every skill, including submissions awaiting review. Everyone
+         *     else sees approved skills plus their own submissions, so a submitter can
+         *     track the status of what they sent in.
          *
          *     Parameters:
          *         - enabled_only: If true, only return enabled plugins
+         *         - approval_status: Filter to one approval state, e.g. `pending_review` for the admin review queue
          *
          *     Returns:
-         *         List of plugins with their metadata.
+         *         List of plugins with their metadata and review state.
          */
         get: operations["list_plugins_claude_code_plugins_get"];
         put?: never;
@@ -1546,6 +1551,10 @@ export interface paths {
          *     the same name already exists it returns 409 Conflict; use
          *     PUT /claude-code/plugins/{plugin_name} to update an existing plugin.
          *
+         *     Callers that are not proxy admins are self-service submitters: the skill
+         *     is stored with approval_status=pending_review and stays disabled until an
+         *     admin approves it via POST /claude-code/plugins/{plugin_name}/approve.
+         *
          *     Parameters:
          *         - name: Plugin name (kebab-case)
          *         - source: Git source reference (github, url, or git-subdir format)
@@ -1557,7 +1566,8 @@ export interface paths {
          *         - category: Plugin category (optional)
          *
          *     Returns:
-         *         Registration status (action is always "created") and plugin information.
+         *         Registration status ("created" for admins, "submitted_for_review" otherwise)
+         *         and plugin information.
          *
          *     Example:
          *         ```bash
@@ -1610,6 +1620,10 @@ export interface paths {
          *     Returns 404 if no plugin with the given name exists; use
          *     POST /claude-code/plugins to create a new plugin.
          *
+         *     Admins can update any skill and the review state is left untouched. A
+         *     submitter can only update their own skill, and doing so sends it back to
+         *     pending review, since the content an admin approved has changed.
+         *
          *     Parameters:
          *         - plugin_name: Name of the plugin to update (path parameter)
          *         - source: Git source reference (github, url, or git-subdir format)
@@ -1639,12 +1653,51 @@ export interface paths {
         post?: never;
         /**
          * Delete Plugin
-         * @description Delete a plugin from the marketplace.
+         * @description Delete a plugin from the marketplace. Admins can delete any skill; a
+         *     submitter can withdraw one they submitted.
          *
          *     Parameters:
          *         - plugin_name: The name of the plugin to delete
          */
         delete: operations["delete_plugin_claude_code_plugins__plugin_name__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/claude-code/plugins/{plugin_name}/approve": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Approve Plugin
+         * @description Approve a submitted skill (admin only).
+         *
+         *     Approving sets approval_status=active and publishes the skill to
+         *     marketplace.json and the public Skill Hub.
+         *
+         *     reviewed_fingerprint is the manifest_fingerprint returned by
+         *     GET /claude-code/plugins and GET /claude-code/plugins/{plugin_name}. It
+         *     ties the approval to the content that was read, so a submitter cannot get
+         *     an edit published by landing it between the read and the approval.
+         *
+         *     Example:
+         *         ```bash
+         *         FP=$(curl -s http://localhost:4000/claude-code/plugins/my-skill \
+         *           -H "Authorization: Bearer sk-admin-..." | jq -r .manifest_fingerprint)
+         *         curl -X POST http://localhost:4000/claude-code/plugins/my-skill/approve \
+         *           -H "Authorization: Bearer sk-admin-..." \
+         *           -H "Content-Type: application/json" \
+         *           -d "{\"reviewed_fingerprint\": \"$FP\"}"
+         *         ```
+         */
+        post: operations["approve_plugin_claude_code_plugins__plugin_name__approve_post"];
+        delete?: never;
         options?: never;
         head?: never;
         patch?: never;
@@ -1661,7 +1714,7 @@ export interface paths {
         put?: never;
         /**
          * Disable Plugin
-         * @description Disable a plugin without deleting it.
+         * @description Disable a plugin without deleting it. Proxy admins only.
          *
          *     Parameters:
          *         - plugin_name: The name of the plugin to disable
@@ -1684,12 +1737,46 @@ export interface paths {
         put?: never;
         /**
          * Enable Plugin
-         * @description Enable a disabled plugin.
+         * @description Enable a disabled plugin. Proxy admins only.
+         *
+         *     A skill that has not been approved cannot be enabled here: approve it
+         *     through POST /claude-code/plugins/{plugin_name}/approve instead, so the
+         *     reviewer is recorded on the row.
          *
          *     Parameters:
          *         - plugin_name: The name of the plugin to enable
          */
         post: operations["enable_plugin_claude_code_plugins__plugin_name__enable_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/claude-code/plugins/{plugin_name}/reject": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Reject Plugin
+         * @description Reject a submitted skill (admin only).
+         *
+         *     The row is kept unpublished so the submitter can read review_notes and fix the submission.
+         *
+         *     Example:
+         *         ```bash
+         *         curl -X POST http://localhost:4000/claude-code/plugins/my-skill/reject \
+         *           -H "Authorization: Bearer sk-admin-..." \
+         *           -H "Content-Type: application/json" \
+         *           -d '{"review_notes": "point the source at the skill folder"}'
+         *         ```
+         */
+        post: operations["reject_plugin_claude_code_plugins__plugin_name__reject_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -11252,7 +11339,7 @@ export interface paths {
         };
         /**
          * Public Skill Hub
-         * @description Return enabled (public) Claude Code skills — no auth required.
+         * @description Return approved, enabled (public) Claude Code skills. No auth required.
          */
         get: operations["public_skill_hub_public_skill_hub_get"];
         put?: never;
@@ -21287,6 +21374,27 @@ export interface components {
             response_text: string;
         };
         /**
+         * ApprovePluginRequest
+         * @description Administrator approval of a submitted skill.
+         *
+         *     The fingerprint binds the approval to the content the administrator read.
+         *     A submitter who edits their submission after it was read, but before it is
+         *     approved, changes the fingerprint, so the approval is refused rather than
+         *     publishing a manifest nobody reviewed.
+         */
+        ApprovePluginRequest: {
+            /**
+             * Review Notes
+             * @description Reviewer feedback shown to the submitter
+             */
+            review_notes?: string | null;
+            /**
+             * Reviewed Fingerprint
+             * @description manifest_fingerprint of the submission that was reviewed, from GET /claude-code/plugins
+             */
+            reviewed_fingerprint: string;
+        };
+        /**
          * AttachmentImpactResponse
          * @description Response for estimating the impact of a policy attachment.
          */
@@ -30320,11 +30428,19 @@ export interface components {
          * @description Plugin item in list responses.
          */
         PluginListItem: {
+            /**
+             * Approval Status
+             * @default active
+             * @enum {string}
+             */
+            approval_status: "pending_review" | "active" | "rejected";
             author?: components["schemas"]["PluginAuthor"] | null;
             /** Category */
             category?: string | null;
             /** Created At */
             created_at: string | null;
+            /** Created By */
+            created_by?: string | null;
             /** Description */
             description: string | null;
             /** Domain */
@@ -30337,10 +30453,21 @@ export interface components {
             id: string;
             /** Keywords */
             keywords?: string[] | null;
+            /**
+             * Manifest Fingerprint
+             * @default
+             */
+            manifest_fingerprint: string;
             /** Name */
             name: string;
             /** Namespace */
             namespace?: string | null;
+            /** Review Notes */
+            review_notes?: string | null;
+            /** Reviewed At */
+            reviewed_at?: string | null;
+            /** Reviewed By */
+            reviewed_by?: string | null;
             /** Source */
             source: {
                 [key: string]: string;
@@ -30355,6 +30482,13 @@ export interface components {
          * @description Plugin information in API responses.
          */
         PluginResponse: {
+            /**
+             * Approval Status
+             * @description Administrator approval state
+             * @default active
+             * @enum {string}
+             */
+            approval_status: "pending_review" | "active" | "rejected";
             /**
              * Description
              * @description Plugin description
@@ -31675,7 +31809,7 @@ export interface components {
         RegisterPluginResponse: {
             /**
              * Action
-             * @description Action taken (created/updated)
+             * @description Action taken (created/submitted_for_review/updated)
              */
             action: string;
             /** @description Plugin information */
@@ -31689,6 +31823,17 @@ export interface components {
         /** RejectMCPServerRequest */
         RejectMCPServerRequest: {
             /** Review Notes */
+            review_notes?: string | null;
+        };
+        /**
+         * RejectPluginRequest
+         * @description Administrator rejection of a submitted skill.
+         */
+        RejectPluginRequest: {
+            /**
+             * Review Notes
+             * @description Reviewer feedback shown to the submitter
+             */
             review_notes?: string | null;
         };
         /**
@@ -31955,6 +32100,48 @@ export interface components {
             RateLimitErrorRetries?: number | null;
             /** Timeouterrorretries */
             TimeoutErrorRetries?: number | null;
+        };
+        /**
+         * ReviewPluginResponse
+         * @description Response from approving or rejecting a submitted skill.
+         */
+        ReviewPluginResponse: {
+            /**
+             * Approval Status
+             * @description Resulting approval state
+             * @enum {string}
+             */
+            approval_status: "pending_review" | "active" | "rejected";
+            /**
+             * Enabled
+             * @description Whether the skill is now served to users
+             */
+            enabled: boolean;
+            /**
+             * Name
+             * @description Skill name
+             */
+            name: string;
+            /**
+             * Review Notes
+             * @description Reviewer feedback
+             */
+            review_notes?: string | null;
+            /**
+             * Reviewed At
+             * @description ISO timestamp of the review
+             */
+            reviewed_at?: string | null;
+            /**
+             * Reviewed By
+             * @description User id of the reviewing administrator
+             */
+            reviewed_by?: string | null;
+            /**
+             * Status
+             * @description Operation status
+             */
+            status: string;
         };
         /**
          * RoleMappings
@@ -38242,6 +38429,7 @@ export interface operations {
         parameters: {
             query?: {
                 enabled_only?: boolean;
+                approval_status?: ("pending_review" | "active" | "rejected") | null;
             };
             header?: never;
             path?: never;
@@ -38399,6 +38587,41 @@ export interface operations {
             };
         };
     };
+    approve_plugin_claude_code_plugins__plugin_name__approve_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ApprovePluginRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewPluginResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     disable_plugin_claude_code_plugins__plugin_name__disable_post: {
         parameters: {
             query?: never;
@@ -38448,6 +38671,41 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    reject_plugin_claude_code_plugins__plugin_name__reject_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                plugin_name: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RejectPluginRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ReviewPluginResponse"];
                 };
             };
             /** @description Validation Error */
