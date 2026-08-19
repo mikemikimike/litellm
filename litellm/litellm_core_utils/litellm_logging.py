@@ -987,9 +987,7 @@ class Logging(LiteLLMLoggingBaseClass):
             callback_type=CustomPromptManagement
         )
 
-        # A registered prompt manager can only handle requests that identify a
-        # managed prompt. Dynamic-parameter hooks (for example cache control)
-        # must remain eligible when no prompt_id was supplied.
+        # Prompt managers require an explicit managed-prompt identifier.
         if prompt_management_loggers and prompt_id is not None:
             logger: Final = prompt_management_loggers[0]
             self.model_call_details["prompt_integration"] = logger.__class__.__name__
