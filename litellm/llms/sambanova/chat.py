@@ -114,17 +114,21 @@ class SambanovaConfig(OpenAIGPTConfig):
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
     ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
-        """
-        Transform messages to handle content list conversion.
+        """Convert text-only content lists while preserving multimodal blocks."""
 
-        SambaNova API doesn't support content as a list - only string content.
-        This converts content lists like [{"type": "text", "text": "..."}] to strings.
-        """
+        def _transform() -> list[AllMessageValues]:
+            # Keep image/audio blocks intact so vision-capable models receive them.
+            if any(
+                isinstance(message.get("content"), list)
+                and any(block.get("type") != "text" for block in message["content"] if isinstance(block, dict))
+                for message in messages
+            ):
+                return messages
+            return handle_messages_with_content_list_to_str_conversion(messages)
 
         async def _async_transform():
-            return handle_messages_with_content_list_to_str_conversion(messages)
+            return _transform()
 
         if is_async:
             return _async_transform()
-        messages = handle_messages_with_content_list_to_str_conversion(messages)
-        return messages
+        return _transform()

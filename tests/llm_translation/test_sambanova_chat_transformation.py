@@ -71,6 +71,20 @@ class TestSambanovaContentListHandling:
 
         assert transformed_messages[0]["content"] == "Hello, how are you?"
 
+    def test_multimodal_content_list_is_preserved(self):
+        config = SambanovaConfig()
+        image_block = {
+            "type": "image_url",
+            "image_url": {"url": "data:image/png;base64,abc"},
+        }
+        messages = [{"role": "user", "content": [{"type": "text", "text": "What is this?"}, image_block]}]
+
+        transformed_messages = config._transform_messages(
+            messages=messages, model="sambanova/gemma-4-31B-it", is_async=False
+        )
+
+        assert transformed_messages[0]["content"] == messages[0]["content"]
+
     def test_multiple_messages_transformation(self):
         """
         Test transformation of multiple messages with mixed content types.
